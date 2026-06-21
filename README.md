@@ -22,6 +22,8 @@ The main live experiment loads and fingerprints the current open-weight comparis
 
 - Hugging Face model download and cache support.
 - Live multi-model experiment without stored reference fingerprints.
+- Optional research-grade live baseline comparisons in single-model mode.
+- Dependency bootstrap that upgrades outdated package versions, not just missing ones.
 - Exact 16-feature gradient fingerprint extraction from global, attention, FFN/MLP, embedding, and structural signals.
 - Optional Gaussian perturbation during gradient probing.
 - Pairwise cosine similarity and Euclidean distance matrix.
@@ -44,6 +46,6 @@ The main live experiment loads and fingerprints the current open-weight comparis
 
 The live paper experiment is slower than the exploratory single-model audit because it downloads and fingerprints multiple models sequentially. For a quick app check, use the single-model audit or reduce perturbation runs, sequence length, and sampled gradient entries.
 
-Mistral/Ministral is temporarily removed from the live experiment. The current 3B Ministral checkpoints use a newer config path that is not compatible with this text-only `AutoModelForCausalLM` gradient pipeline, while the compatible 8B checkpoint is too heavy for reliable Colab T4 gradient runs. `HuggingFaceTB/SmolLM2-1.7B-Instruct` is used as the additional lightweight open-weight comparison model.
+Mistral/Ministral is temporarily removed from the live experiment. The current 3B Ministral checkpoints use a newer config path that is not compatible with this text-only `AutoModelForCausalLM` gradient pipeline, while the compatible 8B checkpoint is too heavy for reliable Colab T4 gradient runs. `HuggingFaceTB/SmolLM2-1.7B-Instruct` is used as the additional lightweight open-weight comparison model so the four-model run stays lighter and more reliable on Colab-class GPUs while preserving a cross-family comparison model.
 
 Technical fingerprints are audit evidence, not standalone legal proof of model origin. Models without white-box weight access remain technically unverifiable under this gradient-based method.

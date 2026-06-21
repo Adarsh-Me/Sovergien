@@ -44,6 +44,7 @@ REQUIRED_PACKAGES = [
     "matplotlib>=3.8.0",
     "numpy>=1.26.0",
     "pandas>=2.2.0",
+    "packaging>=24.1",
     "safetensors>=0.4.3",
     "scikit-learn>=1.4.0",
     "scipy>=1.11.0",
@@ -54,8 +55,10 @@ REQUIRED_PACKAGES = [
 
 
 def install_missing_packages() -> None:
-    """Install runtime dependencies inside Colab if they are missing."""
+    """Install runtime dependencies inside Colab if they are missing or outdated."""
+    import importlib.metadata
     import importlib.util
+    from packaging.version import InvalidVersion, Version
 
     package_to_import = {
         "accelerate": "accelerate",
@@ -65,6 +68,7 @@ def install_missing_packages() -> None:
         "matplotlib": "matplotlib",
         "numpy": "numpy",
         "pandas": "pandas",
+        "packaging": "packaging",
         "safetensors": "safetensors",
         "scikit-learn": "sklearn",
         "scipy": "scipy",
@@ -76,12 +80,20 @@ def install_missing_packages() -> None:
     missing = []
     for requirement in REQUIRED_PACKAGES:
         package_name = requirement.split(">=")[0]
+        min_version = requirement.split(">=")[1]
         import_name = package_to_import[package_name]
         if importlib.util.find_spec(import_name) is None:
             missing.append(requirement)
+            continue
+        try:
+            installed_version = importlib.metadata.version(package_name)
+            if Version(installed_version) < Version(min_version):
+                missing.append(requirement)
+        except (importlib.metadata.PackageNotFoundError, InvalidVersion):
+            missing.append(requirement)
 
     if missing:
-        print("Installing missing packages:", ", ".join(missing))
+        print("Installing/upgrading runtime packages:", ", ".join(missing))
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *missing])
 
 
@@ -144,6 +156,8 @@ PAPER_MODEL_IDS = [
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
 ]
 
+LIVE_BASELINE_MODEL_IDS = PAPER_MODEL_IDS.copy()
+
 ATTENTION_KEYWORDS = ["q_proj", "k_proj", "v_proj", "o_proj", "query", "key", "value", "attention"]
 MLP_KEYWORDS = ["gate_proj", "up_proj", "down_proj", "dense", "fc1", "fc2", "mlp"]
 TARGET_KEYWORDS = ATTENTION_KEYWORDS + MLP_KEYWORDS
@@ -156,7 +170,6 @@ REFERENCE_FAMILIES = {
     "Qwen2.5-1.5B-Instruct": "Qwen",
     "DeepSeek-R1-Distill-Qwen-1.5B": "DeepSeek/Qwen derivative",
     "Gemma-2-2B": "Gemma",
-    "Ministral-8B-Instruct-2410": "Ministral",
     "Mistral-7B": "Mistral",
     "Phi-3.5-mini": "Phi",
     "SmolLM2-1.7B-Instruct": "SmolLM",
@@ -172,7 +185,6 @@ REFERENCE_MODEL_IDS = {
     "Qwen2.5-1.5B-Instruct": "Qwen/Qwen2.5-1.5B-Instruct",
     "DeepSeek-R1-Distill-Qwen-1.5B": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     "Gemma-2-2B": "google/gemma-2-2b",
-    "Ministral-8B-Instruct-2410": "mistralai/Ministral-8B-Instruct-2410",
     "Mistral-7B": "mistralai/Mistral-7B-v0.1",
     "Phi-3.5-mini": "microsoft/Phi-3.5-mini-instruct",
     "SmolLM2-1.7B-Instruct": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
@@ -201,7 +213,6 @@ REFERENCE_FINGERPRINTS: Dict[str, List[float]] = {
     "Qwen2.5-1.5B-Instruct": [0.00046, 0.0082, 2.90, 0.16, -0.43, 0.00043, 0.0079, 2.60, 0.13, -0.40, 0.00041, 0.0081, 2.80, 0.12, 1540.0, 28.0],
     "DeepSeek-R1-Distill-Qwen-1.5B": [0.00044, 0.0080, 2.70, 0.14, -0.44, 0.00041, 0.0077, 2.60, 0.13, -0.41, 0.00039, 0.0079, 2.60, 0.10, 1540.0, 28.0],
     "Gemma-2-2B": [0.00009, 0.0012, 0.50, -0.05, 0.08, 0.00009, 0.0011, 0.40, -0.04, 0.07, 0.00009, 0.0011, 0.40, -0.04, 2610.0, 26.0],
-    "Ministral-8B-Instruct-2410": [0.00021, 0.0041, 1.65, 0.07, -0.18, 0.00020, 0.0039, 1.52, 0.06, -0.17, 0.00020, 0.0040, 1.58, 0.07, 8000.0, 36.0],
     "Mistral-7B": [0.00025, 0.0048, 1.90, 0.08, -0.22, 0.00023, 0.0045, 1.70, 0.07, -0.20, 0.00024, 0.0046, 1.80, 0.08, 7240.0, 32.0],
     "Phi-3.5-mini": [0.00008, 0.0009, 0.30, -0.02, 0.05, 0.00008, 0.0009, 0.20, -0.01, 0.04, 0.00008, 0.0009, 0.30, -0.02, 3820.0, 32.0],
     "SmolLM2-1.7B-Instruct": [0.00033, 0.0058, 2.35, 0.12, -0.25, 0.00031, 0.0054, 2.05, 0.10, -0.23, 0.00032, 0.0056, 2.20, 0.10, 1700.0, 24.0],
@@ -261,6 +272,7 @@ class AuditConfig:
     quick_smoke_test: bool = False
     save_to_drive: bool = False
     persist_model_cache: bool = False
+    comparison_mode: str = "stored_reference_library"
     open_weights: bool = True
     data_transparency: bool = False
     recipe_disclosure: bool = False
@@ -527,17 +539,41 @@ def load_tokenizer_and_model(model_id: str, hf_token: str, quick_smoke_test: boo
 
     device_map = "auto" if torch.cuda.is_available() else None
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    load_attempts = [
+        {
+            "token": hf_token or None,
+            "trust_remote_code": True,
+            "torch_dtype": dtype,
+            "low_cpu_mem_usage": True,
+            "device_map": device_map,
+            "attn_implementation": "sdpa",
+            "cache_dir": cache_dir,
+        },
+        {
+            "token": hf_token or None,
+            "trust_remote_code": True,
+            "torch_dtype": dtype,
+            "low_cpu_mem_usage": True,
+            "device_map": device_map,
+            "cache_dir": cache_dir,
+        },
+    ]
 
-    model = AutoModelForCausalLM.from_pretrained(
-        actual_model_id,
-        token=hf_token or None,
-        trust_remote_code=True,
-        torch_dtype=dtype,
-        low_cpu_mem_usage=True,
-        device_map=device_map,
-        attn_implementation="sdpa",
-        cache_dir=cache_dir,
-    )
+    last_error = None
+    model = None
+    for attempt_idx, kwargs in enumerate(load_attempts, start=1):
+        try:
+            if progress:
+                progress(0.985, desc=f"Loading model attempt {attempt_idx}/{len(load_attempts)}")
+            model = AutoModelForCausalLM.from_pretrained(actual_model_id, **kwargs)
+            break
+        except Exception as exc:
+            last_error = exc
+            print(f"Model load attempt {attempt_idx} failed for {actual_model_id}: {exc}")
+
+    if model is None:
+        raise RuntimeError(f"Unable to load {actual_model_id} with AutoModelForCausalLM. Last error: {last_error}")
+
     model.eval()
     if hasattr(model.config, "use_cache"):
         model.config.use_cache = False
@@ -857,23 +893,75 @@ def cosine_similarity(u: np.ndarray, v: np.ndarray) -> float:
     return float(np.dot(u, v) / denom) if denom else 0.0
 
 
-def similarity_table(fingerprint: np.ndarray) -> pd.DataFrame:
+def stored_reference_library() -> Dict[str, np.ndarray]:
+    return {name: np.array(ref, dtype=np.float64) for name, ref in REFERENCE_FINGERPRINTS.items()}
+
+
+def build_live_reference_library(
+    hf_token: str,
+    seed: int,
+    perturbation_runs: int,
+    max_length: int,
+    sample_gradient_entries: int,
+    weight_noise_std: float,
+    progress=None,
+) -> Dict[str, np.ndarray]:
+    live_library = {}
+    total = len(LIVE_BASELINE_MODEL_IDS)
+    for idx, model_id in enumerate(LIVE_BASELINE_MODEL_IDS, start=1):
+        if progress:
+            progress(idx / max(1, total + 1), desc=f"Live baseline {idx}/{total}: {model_id}")
+        cfg = AuditConfig(
+            model_id=model_id,
+            hf_token=hf_token,
+            seed=seed,
+            perturbation_runs=perturbation_runs,
+            max_length=max_length,
+            sample_gradient_entries=sample_gradient_entries,
+            weight_noise_std=weight_noise_std,
+            quick_smoke_test=False,
+        )
+        auditor = TensorGuardLiteAuditor(cfg)
+        fingerprint, _ = auditor.extract_fingerprint(progress=progress)
+        live_library[model_id] = fingerprint
+        cleanup_cuda()
+    return live_library
+
+
+def comparison_library(config: AuditConfig, progress=None) -> Tuple[Dict[str, np.ndarray], str]:
+    if config.comparison_mode == "live_paper_baselines":
+        return (
+            build_live_reference_library(
+                hf_token=config.hf_token,
+                seed=config.seed,
+                perturbation_runs=min(6, int(config.perturbation_runs)),
+                max_length=config.max_length,
+                sample_gradient_entries=config.sample_gradient_entries,
+                weight_noise_std=config.weight_noise_std,
+                progress=progress,
+            ),
+            "live_paper_baselines",
+        )
+    return stored_reference_library(), "stored_reference_library"
+
+
+def similarity_table(fingerprint: np.ndarray, reference_library: Dict[str, np.ndarray]) -> pd.DataFrame:
     rows = []
-    for name, ref in REFERENCE_FINGERPRINTS.items():
-        ref_vec = np.array(ref, dtype=np.float64)
+    for name, ref_vec in reference_library.items():
+        ref_arr = np.array(ref_vec, dtype=np.float64)
         rows.append(
             {
                 "Reference Model": name,
-                "Cosine Similarity": round(cosine_similarity(fingerprint, ref_vec), 6),
-                "Euclidean Distance": round(float(np.linalg.norm(fingerprint - ref_vec)), 6),
+                "Cosine Similarity": round(cosine_similarity(fingerprint, ref_arr), 6),
+                "Euclidean Distance": round(float(np.linalg.norm(fingerprint - ref_arr)), 6),
             }
         )
     return pd.DataFrame(rows).sort_values("Cosine Similarity", ascending=False).reset_index(drop=True)
 
 
-def euclidean_distance_matrix(fingerprint: np.ndarray, model_label: str) -> pd.DataFrame:
-    labels = list(REFERENCE_FINGERPRINTS.keys()) + [f"Audited: {model_label}"]
-    vectors = [np.array(v, dtype=np.float64) for v in REFERENCE_FINGERPRINTS.values()] + [fingerprint]
+def euclidean_distance_matrix(fingerprint: np.ndarray, model_label: str, reference_library: Dict[str, np.ndarray]) -> pd.DataFrame:
+    labels = list(reference_library.keys()) + [f"Audited: {model_label}"]
+    vectors = [np.array(v, dtype=np.float64) for v in reference_library.values()] + [fingerprint]
     matrix = np.zeros((len(labels), len(labels)), dtype=np.float64)
     for i, left in enumerate(vectors):
         for j, right in enumerate(vectors):
@@ -1029,9 +1117,14 @@ def risk_assessment(
 # 9. Publication exports: PCA, LaTeX, CSV, JSON
 # ------------------------------------------------------------------------------
 
-def save_pca_plot(fingerprint: np.ndarray, model_label: str, out_dir: Path) -> Tuple[str, str]:
-    labels = list(REFERENCE_FINGERPRINTS.keys()) + [f"Audited: {model_label}"]
-    matrix = np.vstack([np.array(v, dtype=np.float64) for v in REFERENCE_FINGERPRINTS.values()] + [fingerprint])
+def save_pca_plot(
+    fingerprint: np.ndarray,
+    model_label: str,
+    out_dir: Path,
+    reference_library: Dict[str, np.ndarray],
+) -> Tuple[str, str]:
+    labels = list(reference_library.keys()) + [f"Audited: {model_label}"]
+    matrix = np.vstack([np.array(v, dtype=np.float64) for v in reference_library.values()] + [fingerprint])
     matrix = StandardScaler().fit_transform(matrix)
     coords = PCA(n_components=2, random_state=42).fit_transform(matrix)
 
@@ -1141,6 +1234,7 @@ def metadata_to_dataframe(metadata: Dict[str, object]) -> pd.DataFrame:
         {"Field": "Downloaded Files This Run", "Value": download.get("downloaded_files", "")},
         {"Field": "Reused Cached Files", "Value": download.get("reused_cached_files", "")},
         {"Field": "Cache Directory", "Value": download.get("cache_dir", "")},
+        {"Field": "Comparison Library", "Value": metadata.get("comparison_library", "")},
         {"Field": "Target Modules", "Value": ", ".join(metadata.get("target_modules", []))},
         {"Field": "Embedding Modules", "Value": ", ".join(metadata.get("embedding_modules", []))},
         {"Field": "Fingerprint Schema", "Value": ", ".join(metadata.get("fingerprint_schema", []))},
@@ -1153,16 +1247,20 @@ def run_full_audit(config: AuditConfig, progress=None):
     out_dir = maybe_mount_drive(config.save_to_drive)
     auditor = TensorGuardLiteAuditor(config)
     fingerprint, metadata = auditor.extract_fingerprint(progress=progress)
+    reference_library, library_name = comparison_library(config, progress=progress)
+    metadata["comparison_library"] = library_name
 
-    similarities = similarity_table(fingerprint)
-    distance_matrix = euclidean_distance_matrix(fingerprint, metadata["actual_model_id"])
+    similarities = similarity_table(fingerprint, reference_library)
+    distance_matrix = euclidean_distance_matrix(fingerprint, metadata["actual_model_id"], reference_library)
     fertility = run_tokenizer_fertility_audit(
         "HuggingFaceTB/SmolLM2-135M-Instruct" if config.quick_smoke_test else config.model_id,
         config.hf_token,
     )
+    nearest_reference = str(similarities.iloc[0]["Reference Model"])
+    nearest_model_id = REFERENCE_MODEL_IDS.get(nearest_reference, nearest_reference if "/" in nearest_reference else "Qwen/Qwen2.5-1.5B-Instruct")
     vocab_jaccard = tokenizer_vocab_jaccard(
         "HuggingFaceTB/SmolLM2-135M-Instruct" if config.quick_smoke_test else config.model_id,
-        REFERENCE_MODEL_IDS.get(str(similarities.iloc[0]["Reference Model"]), "Qwen/Qwen2.5-1.5B-Instruct"),
+        nearest_model_id,
         config.hf_token,
     )
     ts, governance = transparency_score(config)
@@ -1180,6 +1278,7 @@ def run_full_audit(config: AuditConfig, progress=None):
         [
             {"Metric": "Requested Model", "Value": config.model_id},
             {"Metric": "Audited Model", "Value": metadata["actual_model_id"]},
+            {"Metric": "Comparison Library", "Value": library_name},
             {"Metric": "Transparency Score", "Value": f"{ts:.2f} / 1.00"},
             {"Metric": "Highest Similarity", "Value": f'{float(best["Cosine Similarity"]):.4f}'},
             {"Metric": "Nearest Reference", "Value": str(best["Reference Model"])},
@@ -1194,7 +1293,7 @@ def run_full_audit(config: AuditConfig, progress=None):
         ]
     )
 
-    png_path, svg_path = save_pca_plot(fingerprint, metadata["actual_model_id"], out_dir)
+    png_path, svg_path = save_pca_plot(fingerprint, metadata["actual_model_id"], out_dir, reference_library)
     latex = scorecard_latex(scorecard)
     exported = export_audit_bundle(
         fingerprint,
@@ -1458,28 +1557,28 @@ def paper_validation_checks(pairwise: pd.DataFrame, token_tax_all: pd.DataFrame)
     smollm_qwen = metric(smollm, qwen, "Cosine Similarity")
     hindi_llama = token_tax_all[
         (token_tax_all["Model"] == llama) & (token_tax_all["Language"] == "Hindi")
-    ]["Fertility Phi"]
-    hindi_fertility = float(hindi_llama.iloc[0]) if not hindi_llama.empty else float("nan")
+    ]["Token Tax Psi vs English"]
+    hindi_token_tax = float(hindi_llama.iloc[0]) if not hindi_llama.empty else float("nan")
 
     return pd.DataFrame(
         [
             {
                 "Paper Claim / Test": "DeepSeek derivative clusters near Qwen parent",
                 "Observed Metric": qwen_deepseek,
-                "Expected Direction": "high cosine similarity",
-                "Pass Heuristic": bool(qwen_deepseek >= max(llama_qwen, smollm_qwen)),
+                "Expected Direction": "high cosine similarity with absolute closeness",
+                "Pass Heuristic": bool(qwen_deepseek >= 0.92),
             },
             {
-                "Paper Claim / Test": "Llama and SmolLM remain separated from Qwen family",
+                "Paper Claim / Test": "Llama and SmolLM remain separate from Qwen family",
                 "Observed Metric": f"Llama-Qwen={llama_qwen:.4f}, SmolLM-Qwen={smollm_qwen:.4f}",
-                "Expected Direction": "lower than DeepSeek-Qwen",
-                "Pass Heuristic": bool(qwen_deepseek > llama_qwen and qwen_deepseek > smollm_qwen),
+                "Expected Direction": "cross-family similarity stays materially below DeepSeek-Qwen",
+                "Pass Heuristic": bool(qwen_deepseek >= 0.92 and qwen_deepseek - max(llama_qwen, smollm_qwen) >= 0.10),
             },
             {
-                "Paper Claim / Test": "Hindi token fertility exposes Indic token tax",
-                "Observed Metric": hindi_fertility,
-                "Expected Direction": "Hindi fertility higher than English",
-                "Pass Heuristic": bool(hindi_fertility > 1.2),
+                "Paper Claim / Test": "Hindi token tax is materially inflated",
+                "Observed Metric": hindi_token_tax,
+                "Expected Direction": "Hindi token tax well above English baseline",
+                "Pass Heuristic": bool(hindi_token_tax >= 2.0),
             },
             {
                 "Paper Claim / Test": "White-box access required",
@@ -1657,6 +1756,7 @@ def ui_run_audit(
     quick_smoke_test,
     save_to_drive,
     persist_model_cache,
+    comparison_mode,
     open_weights,
     data_transparency,
     recipe_disclosure,
@@ -1682,6 +1782,7 @@ def ui_run_audit(
         quick_smoke_test=bool(quick_smoke_test),
         save_to_drive=bool(save_to_drive),
         persist_model_cache=bool(persist_model_cache),
+        comparison_mode=str(comparison_mode),
         open_weights=bool_from_yes_no(open_weights),
         data_transparency=bool_from_yes_no(data_transparency),
         recipe_disclosure=bool_from_yes_no(recipe_disclosure),
@@ -1826,7 +1927,7 @@ def build_dashboard():
 
         with gr.Tab("Audit Setup"):
             gr.Markdown(
-                "Exploratory single-model mode. This audits one selected model live, then compares it to built-in reference fingerprints. Use the Live Paper Experiment tab for the live multi-model result."
+                "Exploratory single-model mode. This audits one selected model live, then compares it either to the documented stored reference library or to freshly generated live paper baselines. Use the Live Paper Experiment tab for the live multi-model result."
             )
             with gr.Row():
                 with gr.Column(scale=1):
@@ -1836,6 +1937,7 @@ def build_dashboard():
                     quick_smoke_test = gr.Checkbox(label="Quick smoke test mode", value=False)
                     save_to_drive = gr.Checkbox(label="Save exports to Google Drive", value=False)
                     persist_model_cache = gr.Checkbox(label="Persist downloaded models in Google Drive", value=False)
+                    comparison_mode = gr.Radio(["stored_reference_library", "live_paper_baselines"], value="stored_reference_library", label="Comparison Mode")
                 with gr.Column(scale=1):
                     seed = gr.Slider(1, 100000, value=42, step=1, label="Deterministic Seed")
                     perturbation_runs = gr.Slider(1, 30, value=6, step=1, label="Perturbation Runs")
@@ -1946,6 +2048,7 @@ def build_dashboard():
                 quick_smoke_test,
                 save_to_drive,
                 persist_model_cache,
+                comparison_mode,
                 open_weights,
                 data_transparency,
                 recipe_disclosure,
@@ -1984,6 +2087,7 @@ def launch_colab_app():
     print(pd.DataFrame([asdict(get_runtime_report())]).to_string(index=False))
     print("\nTip: use Quick smoke test mode first, then run the full target model.")
     print("For gated Llama models, paste a Hugging Face token with accepted model access.")
+    print("Use Live Paper Baselines in single-model mode when you need research-grade comparisons instead of the stored demo library.")
     demo = build_dashboard()
     demo.queue(max_size=8).launch(share=True, debug=False)
 
