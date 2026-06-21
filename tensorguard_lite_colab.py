@@ -133,13 +133,11 @@ DEFAULT_MODEL_OPTIONS = [
     "Qwen/Qwen2.5-1.5B-Instruct",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     "meta-llama/Llama-3.2-1B",
-    "mistralai/Ministral-8B-Instruct-2410",
     "HuggingFaceTB/SmolLM2-135M-Instruct",
 ]
 
 PAPER_MODEL_IDS = [
     "meta-llama/Llama-3.2-1B",
-    "mistralai/Ministral-8B-Instruct-2410",
     "Qwen/Qwen2.5-1.5B",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
 ]
@@ -1360,14 +1358,14 @@ def save_live_pca_plot(fingerprints: Dict[str, np.ndarray], out_dir: Path) -> st
             family = "Unknown"
         ax.scatter(coords[idx, 0], coords[idx, 1], s=60, color=FAMILY_COLORS.get(family, "#1565c0"), edgecolor="black", linewidth=0.4)
         ax.annotate(short, (coords[idx, 0], coords[idx, 1]), xytext=(4, 4), textcoords="offset points", fontsize=7)
-    ax.set_title("Live Paper Experiment PCA: Four Open-Weight SLMs", fontsize=9)
+    ax.set_title("Live Paper Experiment PCA: Open-Weight SLMs", fontsize=9)
     ax.set_xlabel("PC 1")
     ax.set_ylabel("PC 2")
     ax.grid(True, linewidth=0.25, alpha=0.25)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     fig.tight_layout()
-    path = out_dir / "paper_live_four_model_pca.png"
+    path = out_dir / "paper_live_pca.png"
     fig.savefig(path, dpi=600, bbox_inches="tight")
     plt.close(fig)
     return str(path)
@@ -1396,7 +1394,6 @@ def paper_validation_checks(pairwise: pd.DataFrame, token_tax_all: pd.DataFrame)
     qwen = "Qwen/Qwen2.5-1.5B"
     deepseek = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
     llama = "meta-llama/Llama-3.2-1B"
-    ministral = "mistralai/Ministral-8B-Instruct-2410"
 
     def metric(a: str, b: str, col: str) -> float:
         row = pairwise[(pairwise["Model A"] == a) & (pairwise["Model B"] == b)]
@@ -1404,7 +1401,6 @@ def paper_validation_checks(pairwise: pd.DataFrame, token_tax_all: pd.DataFrame)
 
     qwen_deepseek = metric(qwen, deepseek, "Cosine Similarity")
     llama_qwen = metric(llama, qwen, "Cosine Similarity")
-    ministral_qwen = metric(ministral, qwen, "Cosine Similarity")
     hindi_llama = token_tax_all[
         (token_tax_all["Model"] == llama) & (token_tax_all["Language"] == "Hindi")
     ]["Fertility Phi"]
@@ -1416,13 +1412,13 @@ def paper_validation_checks(pairwise: pd.DataFrame, token_tax_all: pd.DataFrame)
                 "Paper Claim / Test": "DeepSeek derivative clusters near Qwen parent",
                 "Observed Metric": qwen_deepseek,
                 "Expected Direction": "high cosine similarity",
-                "Pass Heuristic": bool(qwen_deepseek >= max(llama_qwen, ministral_qwen)),
+                "Pass Heuristic": bool(qwen_deepseek >= llama_qwen),
             },
             {
-                "Paper Claim / Test": "Llama and Ministral remain separate from Qwen family",
-                "Observed Metric": f"Llama-Qwen={llama_qwen:.4f}, Ministral-Qwen={ministral_qwen:.4f}",
+                "Paper Claim / Test": "Llama remains separated from Qwen family",
+                "Observed Metric": f"Llama-Qwen={llama_qwen:.4f}",
                 "Expected Direction": "lower than DeepSeek-Qwen",
-                "Pass Heuristic": bool(qwen_deepseek > llama_qwen and qwen_deepseek > ministral_qwen),
+                "Pass Heuristic": bool(qwen_deepseek > llama_qwen),
             },
             {
                 "Paper Claim / Test": "Hindi token fertility exposes Indic token tax",
@@ -1471,9 +1467,9 @@ def run_paper_experiment_core(
 
     try:
         for idx, model_id in enumerate(PAPER_MODEL_IDS, start=1):
-            logs.append(f"\n[{idx}/4] Downloading/loading/fingerprinting: {model_id}")
+            logs.append(f"\n[{idx}/{len(PAPER_MODEL_IDS)}] Downloading/loading/fingerprinting: {model_id}")
             if progress:
-                progress((idx - 1) / len(PAPER_MODEL_IDS), desc=f"Starting model {idx}/4: {model_id}")
+                progress((idx - 1) / len(PAPER_MODEL_IDS), desc=f"Starting model {idx}/{len(PAPER_MODEL_IDS)}: {model_id}")
             cfg = AuditConfig(
                 model_id=model_id,
                 hf_token=hf_token,
@@ -1503,7 +1499,7 @@ def run_paper_experiment_core(
                 "Target Modules": ", ".join(meta.get("target_modules", [])),
             }
             metadata_rows.append(flat_meta)
-            logs.append(f"[{idx}/4] Done: params={flat_meta['Params M']}M, safetensors={flat_meta['Safetensors Available']}, elapsed={flat_meta['Elapsed Seconds']}s")
+            logs.append(f"[{idx}/{len(PAPER_MODEL_IDS)}] Done: params={flat_meta['Params M']}M, safetensors={flat_meta['Safetensors Available']}, elapsed={flat_meta['Elapsed Seconds']}s")
             cleanup_cuda()
     except Exception as exc:
         cleanup_cuda()
@@ -1542,7 +1538,7 @@ def run_paper_experiment_core(
         )
 
     pairwise, distance_matrix = live_pairwise_tables(fingerprints)
-    logs.append("\nGenerated live cosine/Euclidean pairwise results from all four fresh fingerprints.")
+    logs.append("\nGenerated live cosine/Euclidean pairwise results from all fresh fingerprints.")
     pca_path = save_live_pca_plot(fingerprints, out_dir)
     logs.append(f"Saved live PCA plot: {pca_path}")
 
@@ -1745,7 +1741,7 @@ def build_dashboard():
 
         with gr.Tab("Live Paper Experiment"):
             gr.Markdown(
-                "This is the paper-accurate mode. It loads and fingerprints all four models live: Llama-3.2-1B, a text-only Ministral family model, Qwen2.5-1.5B, and DeepSeek-R1-Distill-Qwen-1.5B. It does not use stored reference fingerprints."
+                "This mode loads and fingerprints the live open-weight comparison set currently enabled in the notebook: Llama-3.2-1B, Qwen2.5-1.5B, and DeepSeek-R1-Distill-Qwen-1.5B. It does not use stored reference fingerprints."
             )
             gr.Markdown(
                 "**Important:** this mode starts with `meta-llama/Llama-3.2-1B`, which normally requires a Hugging Face token with accepted Llama access. If the token is missing or unauthorized, the run will stop and the log will show the exact error."
@@ -1761,21 +1757,21 @@ def build_dashboard():
                 paper_noise = gr.Slider(0.0, 0.01, value=0.001, step=0.0005, label="Gaussian Weight Noise Std")
                 paper_persist_cache = gr.Checkbox(label="Persist downloaded models in Google Drive", value=False)
                 paper_save_drive = gr.Checkbox(label="Save experiment outputs to Google Drive", value=False)
-            paper_button = gr.Button("Run Live Four-Model Paper Experiment", variant="primary", size="lg")
+            paper_button = gr.Button("Run Live Paper Experiment", variant="primary", size="lg")
 
             paper_checks = gr.Dataframe(label="Paper Claim/Test Results", interactive=False)
             with gr.Row():
                 paper_pairwise = gr.Dataframe(label="Live Pairwise Cosine + Euclidean Results", interactive=False)
-                paper_pca = gr.Image(label="Live Four-Model PCA", type="filepath")
+                paper_pca = gr.Image(label="Live PCA", type="filepath")
             paper_distance = gr.Dataframe(label="Live Euclidean Distance Matrix", interactive=False)
-            paper_token_tax = gr.Dataframe(label="Tokenizer Fertility / Token Tax Across All Four Models", interactive=False)
+            paper_token_tax = gr.Dataframe(label="Tokenizer Fertility / Token Tax Across Live Models", interactive=False)
             paper_jaccard = gr.Dataframe(label="Tokenizer Vocabulary Jaccard Matrix", interactive=False)
             paper_metadata = gr.Dataframe(label="Live Model Download / Safetensors / Architecture Metadata", interactive=False)
             paper_report = gr.Code(label="Paper Experiment Export Report", language="json")
 
         with gr.Tab("Audit Setup"):
             gr.Markdown(
-                "Exploratory single-model mode. This audits one selected model live, then compares it to built-in reference fingerprints. Use the Live Paper Experiment tab for the paper-accurate four-model result."
+                "Exploratory single-model mode. This audits one selected model live, then compares it to built-in reference fingerprints. Use the Live Paper Experiment tab for the live multi-model result."
             )
             with gr.Row():
                 with gr.Column(scale=1):
