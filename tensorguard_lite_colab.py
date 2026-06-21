@@ -58,7 +58,13 @@ def install_missing_packages() -> None:
     """Install runtime dependencies inside Colab if they are missing or outdated."""
     import importlib.metadata
     import importlib.util
-    from packaging.version import InvalidVersion, Version
+
+    try:
+        from packaging.version import InvalidVersion, Version
+    except Exception:
+        print("Installing/upgrading runtime package: packaging>=24.1")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "packaging>=24.1"])
+        from packaging.version import InvalidVersion, Version
 
     package_to_import = {
         "accelerate": "accelerate",
