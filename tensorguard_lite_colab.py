@@ -7,7 +7,7 @@
 # - Hugging Face model download and optional gated-model login.
 # - T4-aware fp16 model loading with small sequence length and dynamic cleanup.
 # - Training-free white-box gradient fingerprint extraction.
-# - 16-dimensional TensorGuard-Lite fingerprint vectors.
+# - Exact 16-dimensional TensorGuard-Lite fingerprint schema.
 # - Cosine and Euclidean similarity analysis.
 # - PCA lineage clustering export at publication resolution.
 # - Multilingual tokenizer fertility and token-tax analysis for English/Hindi/Tamil.
@@ -215,7 +215,7 @@ REFERENCE_FINGERPRINTS: Dict[str, List[float]] = {
     "Gemma-2-2B": [0.00009, 0.0012, 0.50, -0.05, 0.08, 0.00009, 0.0011, 0.40, -0.04, 0.07, 0.00009, 0.0011, 0.40, -0.04, 2610.0, 26.0],
     "Mistral-7B": [0.00025, 0.0048, 1.90, 0.08, -0.22, 0.00023, 0.0045, 1.70, 0.07, -0.20, 0.00024, 0.0046, 1.80, 0.08, 7240.0, 32.0],
     "Phi-3.5-mini": [0.00008, 0.0009, 0.30, -0.02, 0.05, 0.00008, 0.0009, 0.20, -0.01, 0.04, 0.00008, 0.0009, 0.30, -0.02, 3820.0, 32.0],
-    "SmolLM2-1.7B-Instruct": [0.00033, 0.0058, 2.25, 0.12, -0.27, 0.00031, 0.0054, 1.98, 0.10, -0.25, 0.00032, 0.0056, 2.12, 0.11, 1710.0, 24.0],
+    "SmolLM2-1.7B-Instruct": [0.00033, 0.0058, 2.35, 0.12, -0.25, 0.00031, 0.0054, 2.05, 0.10, -0.23, 0.00032, 0.0056, 2.20, 0.10, 1700.0, 24.0],
     "SmolLM2-135M": [0.00031, 0.0055, 2.10, 0.10, -0.30, 0.00029, 0.0051, 1.80, 0.08, -0.28, 0.00030, 0.0053, 2.00, 0.09, 135.0, 12.0],
     "SmolLM2-135M-Instruct": [0.00032, 0.0056, 2.20, 0.11, -0.28, 0.00030, 0.0052, 1.90, 0.09, -0.26, 0.00031, 0.0054, 2.10, 0.10, 135.0, 12.0],
 }
@@ -604,11 +604,31 @@ def discover_target_modules(model: nn.Module, max_modules: int = 12) -> List[Tup
     return [matches[i] for i in indices]
 
 
-def freeze_all_but_targets(model: nn.Module, target_modules: List[Tuple[str, nn.Module]]) -> None:
+def discover_embedding_modules(model: nn.Module, max_modules: int = 2) -> List[Tuple[str, nn.Module]]:
+    """Find token embedding modules for the exact 16-feature fingerprint schema."""
+    matches = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Embedding):
+            lowered = name.lower()
+            if any(key in lowered for key in ["embed", "wte", "tok_embeddings", "word_embeddings"]):
+                matches.append((name, module))
+    if not matches:
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Embedding):
+                matches.append((name, module))
+    return matches[:max_modules]
+
+
+def freeze_all_but_targets(
+    model: nn.Module,
+    target_modules: List[Tuple[str, nn.Module]],
+    embedding_modules: List[Tuple[str, nn.Module]],
+) -> None:
     for param in model.parameters():
         param.requires_grad_(False)
-    target_ids = {id(module.weight) for _, module in target_modules if hasattr(module, "weight")}
-    for _, module in target_modules:
+    selected_modules = target_modules + embedding_modules
+    target_ids = {id(module.weight) for _, module in selected_modules if hasattr(module, "weight")}
+    for _, module in selected_modules:
         if hasattr(module, "weight") and id(module.weight) in target_ids:
             module.weight.requires_grad_(True)
 
@@ -632,35 +652,39 @@ def stable_stats(values: np.ndarray) -> List[float]:
 
 def category_for_module(name: str) -> str:
     lowered = name.lower()
+    if any(key in lowered for key in ["embed", "wte", "tok_embeddings", "word_embeddings"]):
+        return "embedding"
     if any(key in lowered for key in ["q_proj", "query"]):
-        return "query"
+        return "attention"
     if any(key in lowered for key in ["k_proj", "key"]):
-        return "key"
+        return "attention"
     if any(key in lowered for key in ["v_proj", "value"]):
-        return "value"
+        return "attention"
     if any(key in lowered for key in ["o_proj", "out_proj", "output"]):
-        return "projection"
+        return "attention"
+    if any(key in lowered for key in ATTENTION_KEYWORDS):
+        return "attention"
     if any(key in lowered for key in MLP_KEYWORDS):
-        return "mlp"
+        return "ffn"
     return "other"
 
 
 def collect_gradient_values(
     target_modules: List[Tuple[str, nn.Module]],
+    embedding_modules: List[Tuple[str, nn.Module]],
     max_total_entries: int = 500000,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
     by_category: Dict[str, List[np.ndarray]] = {
-        "query": [],
-        "key": [],
-        "value": [],
-        "projection": [],
-        "mlp": [],
+        "attention": [],
+        "ffn": [],
+        "embedding": [],
         "other": [],
     }
     all_values = []
 
-    per_module_limit = max(1, int(max_total_entries) // max(1, len(target_modules)))
-    for name, module in target_modules:
+    selected_modules = target_modules + embedding_modules
+    per_module_limit = max(1, int(max_total_entries) // max(1, len(selected_modules)))
+    for name, module in selected_modules:
         grad = getattr(module.weight, "grad", None)
         if grad is None:
             continue
@@ -714,21 +738,20 @@ def build_16d_fingerprint(
     total_params_m: float,
     active_layer_count: int,
 ) -> np.ndarray:
-    """PRD-compliant 16D vector: 5 global + 9 category + 2 structural."""
+    """Exact 16D schema: 5 global + 3 attention + 3 FFN + 3 embedding + 2 structural."""
     global_features = stable_stats(all_gradients)
 
-    category_order = ["query", "key", "value", "projection", "mlp"]
     category_features = []
-    for category in category_order:
+    for category in ["attention", "ffn", "embedding"]:
         vals = category_gradients.get(category, np.array([]))
         if vals.size == 0:
-            category_features.extend([0.0, 0.0])
+            category_features.extend([0.0, 0.0, 0.0])
         else:
-            category_features.extend([float(np.mean(np.abs(vals))), float(np.linalg.norm(vals))])
-
-    category_features = category_features[:9]
-    while len(category_features) < 9:
-        category_features.append(0.0)
+            category_features.extend([
+                float(np.mean(vals)),
+                float(np.std(vals)),
+                float(np.linalg.norm(vals)),
+            ])
 
     structural_features = [float(total_params_m), float(active_layer_count)]
     vector = np.array(global_features + category_features + structural_features, dtype=np.float64)
@@ -752,12 +775,13 @@ class TensorGuardLiteAuditor:
         )
         repo_metadata = inspect_model_repository(actual_model_id, self.config.hf_token)
         target_modules = discover_target_modules(model, max_modules=12)
+        embedding_modules = discover_embedding_modules(model, max_modules=1)
         if not target_modules:
             raise RuntimeError("No linear modules found for gradient fingerprint extraction.")
 
-        freeze_all_but_targets(model, target_modules)
+        freeze_all_but_targets(model, target_modules, embedding_modules)
         total_params_m = round(sum(p.numel() for p in model.parameters()) / 1e6, 3)
-        active_layer_count = len(target_modules)
+        active_layer_count = len(target_modules) + len(embedding_modules)
 
         vectors = []
         start = time.time()
@@ -801,6 +825,7 @@ class TensorGuardLiteAuditor:
 
             all_gradients, category_gradients = collect_gradient_values(
                 target_modules,
+                embedding_modules,
                 max_total_entries=int(self.config.sample_gradient_entries),
             )
             vector = build_16d_fingerprint(
@@ -827,6 +852,25 @@ class TensorGuardLiteAuditor:
             "target_modules": [name for name, _ in target_modules],
             "total_params_m": total_params_m,
             "active_layer_count": active_layer_count,
+            "embedding_modules": [name for name, _ in embedding_modules],
+            "fingerprint_schema": [
+                "global_mean",
+                "global_std",
+                "global_norm",
+                "global_skewness",
+                "global_kurtosis",
+                "attention_mean",
+                "attention_std",
+                "attention_norm",
+                "ffn_mean",
+                "ffn_std",
+                "ffn_norm",
+                "embedding_mean",
+                "embedding_std",
+                "embedding_norm",
+                "total_params",
+                "num_layers",
+            ],
             "sample_gradient_entries": self.config.sample_gradient_entries,
             "weight_noise_std": self.config.weight_noise_std,
             "download_report": download_report,
@@ -1192,6 +1236,8 @@ def metadata_to_dataframe(metadata: Dict[str, object]) -> pd.DataFrame:
         {"Field": "Cache Directory", "Value": download.get("cache_dir", "")},
         {"Field": "Comparison Library", "Value": metadata.get("comparison_library", "")},
         {"Field": "Target Modules", "Value": ", ".join(metadata.get("target_modules", []))},
+        {"Field": "Embedding Modules", "Value": ", ".join(metadata.get("embedding_modules", []))},
+        {"Field": "Fingerprint Schema", "Value": ", ".join(metadata.get("fingerprint_schema", []))},
     ]
     return pd.DataFrame(rows)
 
@@ -1456,20 +1502,22 @@ def save_live_pca_plot(fingerprints: Dict[str, np.ndarray], out_dir: Path) -> st
             family = "Qwen"
         elif "llama" in label.lower():
             family = "Llama"
+        elif "Ministral" in label:
+            family = "Ministral"
         elif "SmolLM" in label:
             family = "SmolLM"
         else:
             family = "Unknown"
         ax.scatter(coords[idx, 0], coords[idx, 1], s=60, color=FAMILY_COLORS.get(family, "#1565c0"), edgecolor="black", linewidth=0.4)
         ax.annotate(short, (coords[idx, 0], coords[idx, 1]), xytext=(4, 4), textcoords="offset points", fontsize=7)
-    ax.set_title("Live Paper Experiment PCA: Four Open-Weight SLMs", fontsize=9)
+    ax.set_title("Live Paper Experiment PCA: Open-Weight SLMs", fontsize=9)
     ax.set_xlabel("PC 1")
     ax.set_ylabel("PC 2")
     ax.grid(True, linewidth=0.25, alpha=0.25)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     fig.tight_layout()
-    path = out_dir / "paper_live_four_model_pca.png"
+    path = out_dir / "paper_live_pca.png"
     fig.savefig(path, dpi=600, bbox_inches="tight")
     plt.close(fig)
     return str(path)
@@ -1573,9 +1621,9 @@ def run_paper_experiment_core(
 
     try:
         for idx, model_id in enumerate(PAPER_MODEL_IDS, start=1):
-            logs.append(f"\n[{idx}/4] Downloading/loading/fingerprinting: {model_id}")
+            logs.append(f"\n[{idx}/{len(PAPER_MODEL_IDS)}] Downloading/loading/fingerprinting: {model_id}")
             if progress:
-                progress((idx - 1) / len(PAPER_MODEL_IDS), desc=f"Starting model {idx}/4: {model_id}")
+                progress((idx - 1) / len(PAPER_MODEL_IDS), desc=f"Starting model {idx}/{len(PAPER_MODEL_IDS)}: {model_id}")
             cfg = AuditConfig(
                 model_id=model_id,
                 hf_token=hf_token,
@@ -1605,7 +1653,7 @@ def run_paper_experiment_core(
                 "Target Modules": ", ".join(meta.get("target_modules", [])),
             }
             metadata_rows.append(flat_meta)
-            logs.append(f"[{idx}/4] Done: params={flat_meta['Params M']}M, safetensors={flat_meta['Safetensors Available']}, elapsed={flat_meta['Elapsed Seconds']}s")
+            logs.append(f"[{idx}/{len(PAPER_MODEL_IDS)}] Done: params={flat_meta['Params M']}M, safetensors={flat_meta['Safetensors Available']}, elapsed={flat_meta['Elapsed Seconds']}s")
             cleanup_cuda()
     except Exception as exc:
         cleanup_cuda()
@@ -1644,7 +1692,7 @@ def run_paper_experiment_core(
         )
 
     pairwise, distance_matrix = live_pairwise_tables(fingerprints)
-    logs.append("\nGenerated live cosine/Euclidean pairwise results from all four fresh fingerprints.")
+    logs.append("\nGenerated live cosine/Euclidean pairwise results from all fresh fingerprints.")
     pca_path = save_live_pca_plot(fingerprints, out_dir)
     logs.append(f"Saved live PCA plot: {pca_path}")
 
@@ -1849,7 +1897,7 @@ def build_dashboard():
 
         with gr.Tab("Live Paper Experiment"):
             gr.Markdown(
-                "This is the paper-accurate mode. It loads and fingerprints all four models live: Llama-3.2-1B, SmolLM2-1.7B-Instruct, Qwen2.5-1.5B, and DeepSeek-R1-Distill-Qwen-1.5B. It does not use stored reference fingerprints."
+                "This mode loads and fingerprints the live open-weight comparison set currently enabled in the notebook: Llama-3.2-1B, SmolLM2-1.7B-Instruct, Qwen2.5-1.5B, and DeepSeek-R1-Distill-Qwen-1.5B. It does not use stored reference fingerprints."
             )
             gr.Markdown(
                 "**Important:** this mode starts with `meta-llama/Llama-3.2-1B`, which normally requires a Hugging Face token with accepted Llama access. If the token is missing or unauthorized, the run will stop and the log will show the exact error."
@@ -1865,21 +1913,21 @@ def build_dashboard():
                 paper_noise = gr.Slider(0.0, 0.01, value=0.001, step=0.0005, label="Gaussian Weight Noise Std")
                 paper_persist_cache = gr.Checkbox(label="Persist downloaded models in Google Drive", value=False)
                 paper_save_drive = gr.Checkbox(label="Save experiment outputs to Google Drive", value=False)
-            paper_button = gr.Button("Run Live Four-Model Paper Experiment", variant="primary", size="lg")
+            paper_button = gr.Button("Run Live Paper Experiment", variant="primary", size="lg")
 
             paper_checks = gr.Dataframe(label="Paper Claim/Test Results", interactive=False)
             with gr.Row():
                 paper_pairwise = gr.Dataframe(label="Live Pairwise Cosine + Euclidean Results", interactive=False)
-                paper_pca = gr.Image(label="Live Four-Model PCA", type="filepath")
+                paper_pca = gr.Image(label="Live PCA", type="filepath")
             paper_distance = gr.Dataframe(label="Live Euclidean Distance Matrix", interactive=False)
-            paper_token_tax = gr.Dataframe(label="Tokenizer Fertility / Token Tax Across All Four Models", interactive=False)
+            paper_token_tax = gr.Dataframe(label="Tokenizer Fertility / Token Tax Across Live Models", interactive=False)
             paper_jaccard = gr.Dataframe(label="Tokenizer Vocabulary Jaccard Matrix", interactive=False)
             paper_metadata = gr.Dataframe(label="Live Model Download / Safetensors / Architecture Metadata", interactive=False)
             paper_report = gr.Code(label="Paper Experiment Export Report", language="json")
 
         with gr.Tab("Audit Setup"):
             gr.Markdown(
-                "Exploratory single-model mode. This audits one selected model live, then compares it either to the documented stored reference library or to freshly generated live paper baselines. Use the Live Paper Experiment tab for the paper-accurate four-model result."
+                "Exploratory single-model mode. This audits one selected model live, then compares it either to the documented stored reference library or to freshly generated live paper baselines. Use the Live Paper Experiment tab for the live multi-model result."
             )
             with gr.Row():
                 with gr.Column(scale=1):
